@@ -4,9 +4,11 @@
     i18n: {},
     file: null,
     jobId: null,
+    accessToken: null,
     graph: null,
     rows: [],
     downloadUrl: null,
+    pollTimer: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -187,18 +189,68 @@
     $("btnConfirm").disabled = !on;
   }
 
+  function stopPoll() {
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  function applyJobResult(data) {
+    state.graph = data.graph;
+    state.rows = data.rows || [];
+    renderMeta(data.metadata);
+    renderWarnings(data.warnings || []);
+    renderRows();
+    enableActions(true);
+    if (data.preview_url) {
+      $("previewImg").src = data.preview_url + "&t=" + Date.now();
+      $("previewImg").classList.remove("hidden");
+      $("previewEmpty").classList.add("hidden");
+    }
+    setStatus(`${(data.rows || []).length} rows · job ${state.jobId}`);
+  }
+
+  async function pollJobUntilDone() {
+    const url = `/api/jobs/${state.jobId}?access_token=${encodeURIComponent(
+      state.accessToken
+    )}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(
+        typeof data.detail === "string" ? data.detail : "poll failed"
+      );
+    }
+    if (data.status === "queued" || data.status === "running") {
+      setStatus(`${t("recognizing")} (${data.status}) · job ${state.jobId}`);
+      return false;
+    }
+    if (data.status === "error") {
+      throw new Error(data.error || "recognize failed");
+    }
+    // done / confirmed
+    applyJobResult(data);
+    return true;
+  }
+
   async function runRecognize({ fixture = null } = {}) {
     const btn = $("btnRecognize");
     btn.disabled = true;
     $("t-recognize").textContent = t("recognizing");
     setStatus(t("recognizing"));
     invalidateDownload();
+    enableActions(false);
+    stopPoll();
 
     try {
       const fd = new FormData();
       if (fixture) {
-        // Upload a tiny placeholder; server uses fixture
-        fd.append("file", new Blob(["fixture"], { type: "application/pdf" }), "demo.pdf");
+        fd.append(
+          "file",
+          new Blob(["fixture"], { type: "application/pdf" }),
+          "demo.pdf"
+        );
       } else {
         if (!state.file) throw new Error("No file");
         fd.append("file", state.file);
@@ -222,20 +274,28 @@
       }
 
       state.jobId = data.job_id;
-      state.graph = data.graph;
-      state.rows = data.rows || [];
-      renderMeta(data.metadata);
-      renderWarnings(data.warnings);
-      renderRows();
-      enableActions(true);
+      state.accessToken = data.access_token;
+      setStatus(`${t("recognizing")} · job ${state.jobId}`);
 
-      if (data.preview_url) {
-        $("previewImg").src = data.preview_url + "?t=" + Date.now();
-        $("previewImg").classList.remove("hidden");
-        $("previewEmpty").classList.add("hidden");
+      // Poll until background recognition finishes (supports multi-user)
+      const done = await pollJobUntilDone();
+      if (!done) {
+        await new Promise((resolve, reject) => {
+          state.pollTimer = setInterval(async () => {
+            try {
+              if (await pollJobUntilDone()) {
+                stopPoll();
+                resolve();
+              }
+            } catch (err) {
+              stopPoll();
+              reject(err);
+            }
+          }, 2000);
+        });
       }
-      setStatus(`${data.rows.length} rows · job ${data.job_id}`);
     } catch (err) {
+      stopPoll();
       setStatus(String(err.message || err), true);
       enableActions(false);
     } finally {
@@ -245,12 +305,16 @@
   }
 
   async function confirmExport() {
-    if (!state.jobId) return;
+    if (!state.jobId || !state.accessToken) return;
     setStatus("…");
     const res = await fetch(`/api/jobs/${state.jobId}/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: state.rows, graph: state.graph }),
+      body: JSON.stringify({
+        rows: state.rows,
+        graph: state.graph,
+        access_token: state.accessToken,
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
