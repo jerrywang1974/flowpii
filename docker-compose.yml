@@ -1,0 +1,13 @@
+services:
+  flowpii:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      XAI_API_KEY: ${XAI_API_KEY}
+      FLOWPII_MODEL: ${FLOWPII_MODEL:-grok-4.5}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./out:/app/out
+      - ./samples:/app/samples:ro
+    restart: unless-stopped
