@@ -4,9 +4,11 @@
     i18n: {},
     file: null,
     jobId: null,
+    accessToken: null,
     graph: null,
     rows: [],
     downloadUrl: null,
+    pollTimer: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -176,15 +178,83 @@
 
   function invalidateDownload() {
     state.downloadUrl = null;
-    const a = $("btnDownload");
-    a.href = "#";
-    a.classList.add("pointer-events-none", "opacity-40");
+    const btn = $("btnDownload");
+    btn.disabled = true;
     $("successMsg").classList.add("hidden");
+  }
+
+  async function downloadExcelBlob(url) {
+    setStatus(t("downloading"));
+    const res = await fetch(url);
+    if (!res.ok) {
+      let detail = `download failed (HTTP ${res.status})`;
+      try {
+        const j = await res.json();
+        if (j.detail) detail = j.detail;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = "個人資料盤點清冊.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
   }
 
   function enableActions(on) {
     $("btnAdd").disabled = !on;
     $("btnConfirm").disabled = !on;
+  }
+
+  function stopPoll() {
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  function applyJobResult(data) {
+    state.graph = data.graph;
+    state.rows = data.rows || [];
+    renderMeta(data.metadata);
+    renderWarnings(data.warnings || []);
+    renderRows();
+    enableActions(true);
+    if (data.preview_url) {
+      $("previewImg").src = data.preview_url + "&t=" + Date.now();
+      $("previewImg").classList.remove("hidden");
+      $("previewEmpty").classList.add("hidden");
+    }
+    setStatus(`${(data.rows || []).length} rows · job ${state.jobId}`);
+  }
+
+  async function pollJobUntilDone() {
+    const url = `/api/jobs/${state.jobId}?access_token=${encodeURIComponent(
+      state.accessToken
+    )}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(
+        typeof data.detail === "string" ? data.detail : "poll failed"
+      );
+    }
+    if (data.status === "queued" || data.status === "running") {
+      setStatus(`${t("recognizing")} (${data.status}) · job ${state.jobId}`);
+      return false;
+    }
+    if (data.status === "error") {
+      throw new Error(data.error || "recognize failed");
+    }
+    // done / confirmed
+    applyJobResult(data);
+    return true;
   }
 
   async function runRecognize({ fixture = null } = {}) {
@@ -193,12 +263,17 @@
     $("t-recognize").textContent = t("recognizing");
     setStatus(t("recognizing"));
     invalidateDownload();
+    enableActions(false);
+    stopPoll();
 
     try {
       const fd = new FormData();
       if (fixture) {
-        // Upload a tiny placeholder; server uses fixture
-        fd.append("file", new Blob(["fixture"], { type: "application/pdf" }), "demo.pdf");
+        fd.append(
+          "file",
+          new Blob(["fixture"], { type: "application/pdf" }),
+          "demo.pdf"
+        );
       } else {
         if (!state.file) throw new Error("No file");
         fd.append("file", state.file);
@@ -207,24 +282,43 @@
         ? `/api/recognize?use_fixture=${encodeURIComponent(fixture)}`
         : "/api/recognize";
       const res = await fetch(url, { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "recognize failed");
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`recognize failed (HTTP ${res.status})`);
+      }
+      if (!res.ok) {
+        const detail =
+          typeof data.detail === "string"
+            ? data.detail
+            : JSON.stringify(data.detail || data);
+        throw new Error(detail || "recognize failed");
+      }
 
       state.jobId = data.job_id;
-      state.graph = data.graph;
-      state.rows = data.rows || [];
-      renderMeta(data.metadata);
-      renderWarnings(data.warnings);
-      renderRows();
-      enableActions(true);
+      state.accessToken = data.access_token;
+      setStatus(`${t("recognizing")} · job ${state.jobId}`);
 
-      if (data.preview_url) {
-        $("previewImg").src = data.preview_url + "?t=" + Date.now();
-        $("previewImg").classList.remove("hidden");
-        $("previewEmpty").classList.add("hidden");
+      // Poll until background recognition finishes (supports multi-user)
+      const done = await pollJobUntilDone();
+      if (!done) {
+        await new Promise((resolve, reject) => {
+          state.pollTimer = setInterval(async () => {
+            try {
+              if (await pollJobUntilDone()) {
+                stopPoll();
+                resolve();
+              }
+            } catch (err) {
+              stopPoll();
+              reject(err);
+            }
+          }, 2000);
+        });
       }
-      setStatus(`${data.rows.length} rows · job ${data.job_id}`);
     } catch (err) {
+      stopPoll();
       setStatus(String(err.message || err), true);
       enableActions(false);
     } finally {
@@ -234,26 +328,44 @@
   }
 
   async function confirmExport() {
-    if (!state.jobId) return;
-    setStatus("…");
-    const res = await fetch(`/api/jobs/${state.jobId}/confirm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: state.rows, graph: state.graph }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus(data.detail || "confirm failed", true);
-      return;
+    if (!state.jobId || !state.accessToken) return;
+    const btn = $("btnConfirm");
+    btn.disabled = true;
+    $("t-confirmExport").textContent = t("exporting");
+    setStatus(t("exporting"));
+    try {
+      const res = await fetch(`/api/jobs/${state.jobId}/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rows: state.rows,
+          graph: state.graph,
+          access_token: state.accessToken,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(
+          typeof data.detail === "string" ? data.detail : "confirm failed",
+          true
+        );
+        return;
+      }
+      state.downloadUrl = data.download_url;
+      $("btnDownload").disabled = false;
+      const msg = $("successMsg");
+      msg.textContent = t("success");
+      msg.classList.remove("hidden");
+      setStatus(`${data.row_count} rows · ${t("downloading")}`);
+      // Auto-download via blob (avoids same-tab navigation hang)
+      await downloadExcelBlob(data.download_url);
+      setStatus(`${data.row_count} rows · ${t("downloadReady")}`);
+    } catch (err) {
+      setStatus(String(err.message || err), true);
+    } finally {
+      $("t-confirmExport").textContent = t("confirmExport");
+      btn.disabled = false;
     }
-    state.downloadUrl = data.download_url;
-    const a = $("btnDownload");
-    a.href = data.download_url;
-    a.classList.remove("pointer-events-none", "opacity-40");
-    const msg = $("successMsg");
-    msg.textContent = t("success");
-    msg.classList.remove("hidden");
-    setStatus(`${data.row_count} rows confirmed`);
   }
 
   // events
@@ -298,6 +410,18 @@
     renderRows();
   });
   $("btnConfirm").addEventListener("click", confirmExport);
+  $("btnDownload").addEventListener("click", async () => {
+    if (!state.downloadUrl) {
+      setStatus(t("needConfirm"), true);
+      return;
+    }
+    try {
+      await downloadExcelBlob(state.downloadUrl);
+      setStatus(t("downloadReady"));
+    } catch (err) {
+      setStatus(String(err.message || err), true);
+    }
+  });
 
   loadI18n(state.lang).then(() => renderMeta(null));
 })();

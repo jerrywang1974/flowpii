@@ -63,3 +63,22 @@ def save_preview_png(png_bytes: bytes, dest: str | Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(png_bytes)
     return dest
+
+
+def detail_crops(png_bytes: bytes) -> list[tuple[str, bytes]]:
+    """Return labeled detail crops to help the model read dense A:/C: labels."""
+    with Image.open(io.BytesIO(png_bytes)) as im:
+        im = im.convert("RGB")
+        w, h = im.size
+        regions = [
+            ("top-center（常見：部門↔第三方雙向多通道 A:）", (0.22, 0.08, 0.72, 0.48)),
+            ("top-right（第三方泳道）", (0.50, 0.05, 0.98, 0.40)),
+            ("middle-systems（系統列：ERP/Sharepoint）", (0.00, 0.35, 0.55, 0.75)),
+        ]
+        out: list[tuple[str, bytes]] = []
+        for label, (x0, y0, x1, y1) in regions:
+            crop = im.crop((int(w * x0), int(h * y0), int(w * x1), int(h * y1)))
+            buf = io.BytesIO()
+            crop.save(buf, format="PNG")
+            out.append((label, buf.getvalue()))
+        return out
