@@ -118,11 +118,13 @@ def _run_recognize_sync(
 
     try:
         job_dir = UPLOAD_DIR / job_id
+        pdf_for_units = raw_path if raw_path.suffix.lower() == ".pdf" else None
         if use_fixture:
             fixture = ROOT / "tests" / "fixtures" / use_fixture
             if not fixture.exists():
                 raise FileNotFoundError(f"fixture 不存在: {use_fixture}")
-            result = recognize_from_fixture(fixture)
+            # Pass uploaded PDF so unlabeled 各單位 detection can run even with fixtures
+            result = recognize_from_fixture(fixture, pdf_path=pdf_for_units)
             preview = None
             try:
                 pages = load_pages_as_png_bytes(raw_path, dpi=120)
@@ -132,7 +134,7 @@ def _run_recognize_sync(
         else:
             pages = load_pages_as_png_bytes(raw_path, dpi=180)
             preview = save_preview_png(pages[0], job_dir / "preview.png")
-            result = recognize_images(pages)
+            result = recognize_images(pages, pdf_path=pdf_for_units)
 
         job.status = "done"
         job.preview = str(preview) if preview else None

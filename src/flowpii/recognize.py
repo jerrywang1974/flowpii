@@ -12,6 +12,7 @@ from .expand import expand_graph
 from .images import detail_crops, load_pages_as_png_bytes
 from .models import BifGraph, RecognizeResult
 from .postprocess import normalize_graph
+from .unlabeled_third_party import augment_unlabeled_units
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "bif_extract.txt"
 REPAIR_PATH = Path(__file__).parent / "prompts" / "bif_repair.txt"
@@ -150,28 +151,16 @@ def _call_repair(
     return normalize_graph(BifGraph.model_validate(_extract_json(raw)))
 
 
-def recognize_images(
-    png_pages: list[bytes],
+def _finalize_graph(
+    graph: BifGraph,
     *,
-    model: str | None = None,
-    repair: bool = True,
+    pdf_path: str | Path | None = None,
+    extra_warnings: list[str] | None = None,
 ) -> RecognizeResult:
-    model_name = model or DEFAULT_MODEL
-    client = _client()
-    graph = _call_extract(client, model_name, png_pages)
-    warnings: list[str] = []
-
-    if repair and _needs_repair(graph):
-        try:
-            repaired = _call_repair(client, model_name, png_pages, graph)
-            # Prefer repaired if it added nodes/edges
-            if len(repaired.edges) >= len(graph.edges) or len(repaired.nodes) >= len(
-                graph.nodes
-            ):
-                graph = repaired
-                warnings.append("已執行第二輪補漏辨識（方向／各單位／多通道）")
-        except Exception as exc:  # noqa: BLE001
-            warnings.append(f"第二輪補漏失敗，沿用第一輪結果：{exc}")
+    """Normalize → auto-add unlabeled 各單位 → expand rows."""
+    warnings = list(extra_warnings or [])
+    graph, unit_warnings = augment_unlabeled_units(graph, pdf_path=pdf_path)
+    warnings.extend(unit_warnings)
 
     rows = expand_graph(graph)
     if not graph.edges:
@@ -192,10 +181,36 @@ def recognize_images(
     if any("各單位" in (n.name or "") for n in graph.nodes):
         if not any(_touches_units(e) for e in graph.edges):
             warnings.append("偵測到「各單位」節點但缺少相關傳輸邊，請人工補齊雙向通道")
-    else:
-        warnings.append("未偵測到「各單位」節點；若圖上有此框請人工補列")
+    elif not unit_warnings:
+        warnings.append("未偵測到「各單位」；若圖上有未標註第三方箭頭請回報以便調整偵測")
 
     return RecognizeResult(graph=graph, rows=rows, warnings=warnings)
+
+
+def recognize_images(
+    png_pages: list[bytes],
+    *,
+    model: str | None = None,
+    repair: bool = True,
+    pdf_path: str | Path | None = None,
+) -> RecognizeResult:
+    model_name = model or DEFAULT_MODEL
+    client = _client()
+    graph = _call_extract(client, model_name, png_pages)
+    warnings: list[str] = []
+
+    if repair and _needs_repair(graph):
+        try:
+            repaired = _call_repair(client, model_name, png_pages, graph)
+            if len(repaired.edges) >= len(graph.edges) or len(repaired.nodes) >= len(
+                graph.nodes
+            ):
+                graph = repaired
+                warnings.append("已執行第二輪補漏辨識（方向／各單位／多通道）")
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"第二輪補漏失敗，沿用第一輪結果：{exc}")
+
+    return _finalize_graph(graph, pdf_path=pdf_path, extra_warnings=warnings)
 
 
 def recognize_file(
@@ -204,11 +219,17 @@ def recognize_file(
     model: str | None = None,
     dpi: int = 200,
 ) -> RecognizeResult:
+    path = Path(path)
     pages = load_pages_as_png_bytes(path, dpi=dpi)
-    return recognize_images(pages, model=model)
+    pdf = path if path.suffix.lower() == ".pdf" else None
+    return recognize_images(pages, model=model, pdf_path=pdf)
 
 
-def recognize_from_fixture(fixture_path: str | Path) -> RecognizeResult:
+def recognize_from_fixture(
+    fixture_path: str | Path,
+    *,
+    pdf_path: str | Path | None = None,
+) -> RecognizeResult:
     data = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
     graph = normalize_graph(BifGraph.model_validate(data))
-    return RecognizeResult(graph=graph, rows=expand_graph(graph), warnings=[])
+    return _finalize_graph(graph, pdf_path=pdf_path)
