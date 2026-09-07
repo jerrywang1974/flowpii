@@ -1,4 +1,13 @@
 (() => {
+  /**
+   * FlowPII 前端狀態機。
+   *
+   * 連續上傳注意：
+   * - 每次「開始辨識」都會產生新的 job_id / access_token（後端隔離）。
+   * - 必須停止上一輪輪詢，並用 recognizeGeneration 丟棄過期的 poll 回呼，
+   *   否則第一份結果可能在第二份辨識中途蓋掉畫面。
+   * - 下載連結綁在當前 job；換檔後必須清空 downloadUrl。
+   */
   const state = {
     lang: localStorage.getItem("flowpii_lang") || "zh-TW",
     i18n: {},
@@ -9,6 +18,8 @@
     rows: [],
     downloadUrl: null,
     pollTimer: null,
+    /** 遞增序號：每次 runRecognize 開始時 +1；過期 poll 不得套用結果 */
+    recognizeGeneration: 0,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -183,6 +194,25 @@
     $("successMsg").classList.add("hidden");
   }
 
+  /**
+   * 開始新一輪辨識前清空上一份結果，避免畫面殘留舊列／舊預覽／舊下載。
+   */
+  function resetJobUiForNewRecognize() {
+    stopPoll();
+    invalidateDownload();
+    state.jobId = null;
+    state.accessToken = null;
+    state.graph = null;
+    state.rows = [];
+    renderRows();
+    renderMeta(null);
+    renderWarnings([]);
+    $("previewImg").classList.add("hidden");
+    $("previewImg").removeAttribute("src");
+    $("previewEmpty").classList.remove("hidden");
+    enableActions(false);
+  }
+
   async function downloadExcelBlob(url) {
     setStatus(t("downloading"));
     const res = await fetch(url);
@@ -219,7 +249,11 @@
     }
   }
 
-  function applyJobResult(data) {
+  function applyJobResult(data, generation) {
+    // 過期回呼：使用者已開始下一輪辨識
+    if (generation !== state.recognizeGeneration) return;
+    if (data.job_id && data.job_id !== state.jobId) return;
+
     state.graph = data.graph;
     state.rows = data.rows || [];
     renderMeta(data.metadata);
@@ -234,26 +268,33 @@
     setStatus(`${(data.rows || []).length} rows · job ${state.jobId}`);
   }
 
-  async function pollJobUntilDone() {
-    const url = `/api/jobs/${state.jobId}?access_token=${encodeURIComponent(
-      state.accessToken
-    )}`;
+  async function pollJobUntilDone(generation) {
+    if (generation !== state.recognizeGeneration) return true; // abort quietly
+
+    const expectedJobId = state.jobId;
+    const token = state.accessToken;
+    const url = `/api/jobs/${expectedJobId}?access_token=${encodeURIComponent(token)}`;
     const res = await fetch(url);
     const data = await res.json();
+
+    if (generation !== state.recognizeGeneration) return true;
     if (!res.ok) {
       throw new Error(
         typeof data.detail === "string" ? data.detail : "poll failed"
       );
     }
+    // 後端回傳的 job 必須仍是目前這輪
+    if (data.job_id && data.job_id !== expectedJobId) {
+      return true;
+    }
     if (data.status === "queued" || data.status === "running") {
-      setStatus(`${t("recognizing")} (${data.status}) · job ${state.jobId}`);
+      setStatus(`${t("recognizing")} (${data.status}) · job ${expectedJobId}`);
       return false;
     }
     if (data.status === "error") {
       throw new Error(data.error || "recognize failed");
     }
-    // done / confirmed
-    applyJobResult(data);
+    applyJobResult(data, generation);
     return true;
   }
 
@@ -261,10 +302,11 @@
     const btn = $("btnRecognize");
     btn.disabled = true;
     $("t-recognize").textContent = t("recognizing");
+
+    // 換檔／連續辨識：先清狀態並作廢上一輪 poll
+    resetJobUiForNewRecognize();
+    const generation = ++state.recognizeGeneration;
     setStatus(t("recognizing"));
-    invalidateDownload();
-    enableActions(false);
-    stopPoll();
 
     try {
       const fd = new FormData();
@@ -296,17 +338,18 @@
         throw new Error(detail || "recognize failed");
       }
 
+      if (generation !== state.recognizeGeneration) return;
+
       state.jobId = data.job_id;
       state.accessToken = data.access_token;
       setStatus(`${t("recognizing")} · job ${state.jobId}`);
 
-      // Poll until background recognition finishes (supports multi-user)
-      const done = await pollJobUntilDone();
+      const done = await pollJobUntilDone(generation);
       if (!done) {
         await new Promise((resolve, reject) => {
           state.pollTimer = setInterval(async () => {
             try {
-              if (await pollJobUntilDone()) {
+              if (await pollJobUntilDone(generation)) {
                 stopPoll();
                 resolve();
               }
@@ -318,12 +361,16 @@
         });
       }
     } catch (err) {
-      stopPoll();
-      setStatus(String(err.message || err), true);
-      enableActions(false);
+      if (generation === state.recognizeGeneration) {
+        stopPoll();
+        setStatus(String(err.message || err), true);
+        enableActions(false);
+      }
     } finally {
-      $("t-recognize").textContent = t("recognize");
-      btn.disabled = !state.file;
+      if (generation === state.recognizeGeneration) {
+        $("t-recognize").textContent = t("recognize");
+        btn.disabled = !(state.file || fixture);
+      }
     }
   }
 
@@ -357,7 +404,6 @@
       msg.textContent = t("success");
       msg.classList.remove("hidden");
       setStatus(`${data.row_count} rows · ${t("downloading")}`);
-      // Auto-download via blob (avoids same-tab navigation hang)
       await downloadExcelBlob(data.download_url);
       setStatus(`${data.row_count} rows · ${t("downloadReady")}`);
     } catch (err) {
@@ -377,6 +423,8 @@
     state.file = f || null;
     $("fileName").textContent = f ? f.name : "";
     $("btnRecognize").disabled = !f;
+    // 選了新檔但尚未辨識：清掉上一份下載，避免誤下舊檔
+    invalidateDownload();
   });
 
   const dz = $("dropzone");
@@ -398,6 +446,7 @@
     state.file = f;
     $("fileName").textContent = f.name;
     $("btnRecognize").disabled = false;
+    invalidateDownload();
   });
 
   $("btnRecognize").addEventListener("click", () => runRecognize());

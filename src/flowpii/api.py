@@ -118,11 +118,13 @@ def _run_recognize_sync(
 
     try:
         job_dir = UPLOAD_DIR / job_id
+        pdf_for_units = raw_path if raw_path.suffix.lower() == ".pdf" else None
         if use_fixture:
             fixture = ROOT / "tests" / "fixtures" / use_fixture
             if not fixture.exists():
                 raise FileNotFoundError(f"fixture 不存在: {use_fixture}")
-            result = recognize_from_fixture(fixture)
+            # Pass uploaded PDF so unlabeled 各單位 detection can run even with fixtures
+            result = recognize_from_fixture(fixture, pdf_path=pdf_for_units)
             preview = None
             try:
                 pages = load_pages_as_png_bytes(raw_path, dpi=120)
@@ -132,7 +134,7 @@ def _run_recognize_sync(
         else:
             pages = load_pages_as_png_bytes(raw_path, dpi=180)
             preview = save_preview_png(pages[0], job_dir / "preview.png")
-            result = recognize_images(pages)
+            result = recognize_images(pages, pdf_path=pdf_for_units)
 
         job.status = "done"
         job.preview = str(preview) if preview else None
@@ -158,7 +160,13 @@ async def api_recognize(
     file: UploadFile = File(...),
     use_fixture: str | None = None,
 ):
-    """Accept upload, return job_id immediately, run recognition in background."""
+    """Accept upload, return job_id immediately, run recognition in background.
+
+    同一瀏覽器連續上傳第二個檔案時：
+    - 每次呼叫都會 ``new_job()``，產生全新 job_id / 目錄 / access_token
+    - 不會覆寫或取消上一個 job（上一個仍可憑舊 token 查詢／下載）
+    - 前端必須停止舊輪詢並綁定新 token，否則會顯示錯檔結果
+    """
     suffix = Path(file.filename or "upload.bin").suffix.lower()
     if suffix not in {".pdf", ".png", ".jpg", ".jpeg"}:
         raise HTTPException(400, detail="僅支援 PDF / JPG / PNG")
