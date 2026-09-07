@@ -102,8 +102,14 @@ async def api_recognize(
             pages = load_pages_as_png_bytes(raw_path, dpi=180)
             preview = save_preview_png(pages[0], job_dir / "preview.png")
             result = recognize_images(pages)
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, detail=f"辨識失敗: {exc}") from exc
+        # Keep message readable in the Web UI status line
+        msg = str(exc)
+        if len(msg) > 500:
+            msg = msg[:500] + "…"
+        raise HTTPException(500, detail=f"辨識失敗: {msg}") from exc
 
     JOBS[job_id] = {
         "result": result,

@@ -207,8 +207,19 @@
         ? `/api/recognize?use_fixture=${encodeURIComponent(fixture)}`
         : "/api/recognize";
       const res = await fetch(url, { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "recognize failed");
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`recognize failed (HTTP ${res.status})`);
+      }
+      if (!res.ok) {
+        const detail =
+          typeof data.detail === "string"
+            ? data.detail
+            : JSON.stringify(data.detail || data);
+        throw new Error(detail || "recognize failed");
+      }
 
       state.jobId = data.job_id;
       state.graph = data.graph;

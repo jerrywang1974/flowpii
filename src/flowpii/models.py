@@ -1,9 +1,48 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def _none_to_empty(v: Any) -> Any:
+    return "" if v is None else v
+
+
+def _none_to_none_or_str(v: Any) -> Any:
+    if v is None:
+        return None
+    return str(v)
+
+
+def _coerce_str(v: Any) -> Any:
+    if v is None:
+        return ""
+    return str(v)
+
+
+def _coerce_code(v: Any) -> Any:
+    if v is None:
+        return ""
+    # LLM sometimes returns 1 / 2 / 10 as int
+    if isinstance(v, int):
+        return f"{v:03d}" if v < 1000 else str(v)
+    return str(v).strip()
+
+
+def _coerce_note_style(v: Any) -> Any:
+    if v is None or v == "":
+        return "newline"
+    if v not in {"newline", "inline", "none"}:
+        return "newline"
+    return v
+
+
+EmptyStr = Annotated[str, BeforeValidator(_none_to_empty)]
+OptStr = Annotated[str | None, BeforeValidator(_none_to_none_or_str)]
+CodeStr = Annotated[str, BeforeValidator(_coerce_code)]
+ReqStr = Annotated[str, BeforeValidator(_coerce_str)]
 
 
 class Lane(str, Enum):
@@ -18,25 +57,38 @@ class MediaType(str, Enum):
     paper = "P"
 
 
+def _coerce_media_list(v: Any) -> Any:
+    if v is None or v == []:
+        return [MediaType.digital]
+    if isinstance(v, str):
+        return [v]
+    return v
+
+
 class Action(BaseModel):
-    method: str = Field(description="傳輸方式，如 Email、上傳、親送")
-    protection: str | None = Field(
+    method: ReqStr = Field(description="傳輸方式，如 Email、上傳、親送")
+    protection: OptStr = Field(
         default=None, description="保護措施原文，如 X、權限、專人"
     )
 
 
 class Carry(BaseModel):
-    code: str = Field(description="資料檔編號，如 002")
-    media: list[MediaType] = Field(description="此邊承載的型態 D/P")
+    code: CodeStr = Field(description="資料檔編號，如 002")
+    media: Annotated[list[MediaType], BeforeValidator(_coerce_media_list)] = Field(
+        default_factory=lambda: [MediaType.digital],
+        description="此邊承載的型態 D/P",
+    )
 
 
 class Node(BaseModel):
-    id: str
-    name: str
+    id: ReqStr
+    name: ReqStr
     lane: Lane | str = Lane.department
-    note: str | None = None
+    note: OptStr = None
     # How to render note in Excel AF/AG to match golden samples
-    note_style: Literal["newline", "inline", "none"] = "newline"
+    note_style: Annotated[
+        Literal["newline", "inline", "none"], BeforeValidator(_coerce_note_style)
+    ] = "newline"
 
     def display_name(self) -> str:
         if self.note and self.note_style == "newline":
@@ -47,17 +99,19 @@ class Node(BaseModel):
 
 
 class Asset(BaseModel):
-    code: str
-    name: str
-    media: list[MediaType] = Field(default_factory=lambda: [MediaType.digital])
+    code: CodeStr
+    name: ReqStr
+    media: Annotated[list[MediaType], BeforeValidator(_coerce_media_list)] = Field(
+        default_factory=lambda: [MediaType.digital]
+    )
 
     def inventory_name(self) -> str:
         return f"{self.code}_{self.name}"
 
 
 class Edge(BaseModel):
-    from_id: str = Field(alias="from")
-    to_id: str = Field(alias="to")
+    from_id: ReqStr = Field(alias="from")
+    to_id: ReqStr = Field(alias="to")
     actions: list[Action] = Field(default_factory=list)
     carries: list[Carry] = Field(default_factory=list)
     bidirectional: bool = False
@@ -66,14 +120,14 @@ class Edge(BaseModel):
 
 
 class Metadata(BaseModel):
-    process_id: str = ""
-    process_name: str = ""
-    department: str = ""
-    controller_or_processor: str | None = None
-    bif_version: str = ""
-    inventory_date: str = ""
-    inventory_version: str = ""
-    company: str | None = None
+    process_id: EmptyStr = ""
+    process_name: EmptyStr = ""
+    department: EmptyStr = ""
+    controller_or_processor: OptStr = None
+    bif_version: EmptyStr = ""
+    inventory_date: EmptyStr = ""
+    inventory_version: EmptyStr = ""
+    company: OptStr = None
 
 
 class BifGraph(BaseModel):

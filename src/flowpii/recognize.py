@@ -30,7 +30,15 @@ def _load_api_key() -> str:
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=_load_api_key(), base_url="https://api.x.ai/v1")
+    # Complex BIF diagrams (e.g. Korea) can take several minutes.
+    import httpx
+
+    timeout = httpx.Timeout(600.0, connect=30.0)
+    return OpenAI(
+        api_key=_load_api_key(),
+        base_url="https://api.x.ai/v1",
+        timeout=timeout,
+    )
 
 
 def _extract_json(text: str) -> dict:
