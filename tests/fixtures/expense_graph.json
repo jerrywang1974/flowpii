@@ -1,0 +1,100 @@
+{
+  "metadata": {
+    "process_id": "1-1-8",
+    "process_name": "支單作業",
+    "department": "管理本部-資安暨個資管理室",
+    "controller_or_processor": "控制者",
+    "bif_version": "1.2",
+    "inventory_date": "2025/8/11",
+    "inventory_version": "V0.3",
+    "company": "雄獅旅行社股份有限公司"
+  },
+  "nodes": [
+    {"id": "sec", "name": "資安暨個資管理室", "lane": "department"},
+    {"id": "erp", "name": "ERP系統", "lane": "system", "note": "支出作業，fnot", "note_style": "inline"},
+    {"id": "sp", "name": "資安室sharepoint", "lane": "system"},
+    {"id": "acct", "name": "會計部", "lane": "department"},
+    {"id": "fin", "name": "財務管理部", "lane": "department"},
+    {"id": "admin", "name": "行政總務部", "lane": "department"},
+    {"id": "units", "name": "各單位", "lane": "third_party"}
+  ],
+  "assets": [
+    {"code": "006", "name": "票券(機票/火車/高鐵票)", "media": ["P"]},
+    {"code": "007", "name": "支單", "media": ["D", "P"]},
+    {"code": "022", "name": "計程車乘車券", "media": ["P"]}
+  ],
+  "edges": [
+    {
+      "from": "sec",
+      "to": "acct",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "006", "media": ["P"]}]
+    },
+    {
+      "from": "acct",
+      "to": "fin",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "006", "media": ["P"]}]
+    },
+    {
+      "from": "fin",
+      "to": "acct",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "006", "media": ["P"]}]
+    },
+    {
+      "from": "sec",
+      "to": "erp",
+      "actions": [{"method": "登打", "protection": "權限"}],
+      "carries": [{"code": "007", "media": ["D"]}]
+    },
+    {
+      "from": "erp",
+      "to": "sec",
+      "actions": [{"method": "列印", "protection": "權限"}],
+      "carries": [{"code": "007", "media": ["P"]}]
+    },
+    {
+      "from": "sec",
+      "to": "acct",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "007", "media": ["P"]}]
+    },
+    {
+      "from": "sec",
+      "to": "sp",
+      "actions": [{"method": "上傳", "protection": "權限"}],
+      "carries": [{"code": "007", "media": ["D"]}]
+    },
+    {
+      "from": "acct",
+      "to": "fin",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "007", "media": ["P"]}]
+    },
+    {
+      "from": "fin",
+      "to": "acct",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "007", "media": ["P"]}]
+    },
+    {
+      "from": "sec",
+      "to": "units",
+      "bidirectional": true,
+      "actions": [
+        {"method": "親送", "protection": "專人"},
+        {"method": "Line", "protection": "X"},
+        {"method": "Fax", "protection": "X"},
+        {"method": "Email", "protection": "X"}
+      ],
+      "carries": [{"code": "007", "media": ["D", "P"]}]
+    },
+    {
+      "from": "sec",
+      "to": "admin",
+      "actions": [{"method": "親送", "protection": "專人"}],
+      "carries": [{"code": "022", "media": ["P"]}]
+    }
+  ]
+}

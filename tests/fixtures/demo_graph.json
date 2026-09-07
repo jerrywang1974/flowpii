@@ -1,0 +1,49 @@
+{
+  "metadata": {
+    "process_id": "1-1-1",
+    "process_name": "資安演練作業",
+    "department": "管理本部-資安暨個資管理室",
+    "controller_or_processor": "控制者",
+    "bif_version": "1.2",
+    "inventory_date": "2025/8/11",
+    "inventory_version": "V0.3",
+    "company": "雄獅旅行社股份有限公司"
+  },
+  "nodes": [
+    {"id": "lion_it", "name": "雄獅資訊", "lane": "system", "note": "後勤管理部-後勤應用組", "note_style": "newline"},
+    {"id": "sec", "name": "資安暨個資管理室", "lane": "department", "note": null, "note_style": "none"},
+    {"id": "onedrive", "name": "OneDrive", "lane": "system", "note": "經辦人員", "note_style": "inline"},
+    {"id": "units", "name": "各單位", "lane": "department", "note": "觸發人員之主管", "note_style": "newline"}
+  ],
+  "assets": [
+    {"code": "002", "name": "演練名單", "media": ["D"]},
+    {"code": "003", "name": "觸發名單", "media": ["D"]},
+    {"code": "004", "name": "演練結果通知", "media": ["D"]}
+  ],
+  "edges": [
+    {
+      "from": "lion_it",
+      "to": "sec",
+      "actions": [{"method": "Email", "protection": "X"}],
+      "carries": [{"code": "002", "media": ["D"]}]
+    },
+    {
+      "from": "sec",
+      "to": "onedrive",
+      "actions": [{"method": "上傳", "protection": "權限"}],
+      "carries": [{"code": "002", "media": ["D"]}]
+    },
+    {
+      "from": "onedrive",
+      "to": "sec",
+      "actions": [{"method": "下載", "protection": "權限"}],
+      "carries": [{"code": "003", "media": ["D"]}]
+    },
+    {
+      "from": "sec",
+      "to": "units",
+      "actions": [{"method": "E-mail", "protection": "X"}],
+      "carries": [{"code": "004", "media": ["D"]}]
+    }
+  ]
+}
