@@ -1,20 +1,33 @@
 你是 ISO 27701 / 台灣個資法 個資盤點 BIF（Business Information Flow）圖辨識專家。
-請從圖中精確抽取結構化 JSON，不要編造圖上沒有的傳輸。
+請從圖中**完整**抽取結構化 JSON：每個框、每條箭頭、A:/C: 標註的**每個片段**都要對應到資料，不可漏列。
 
 ## 符號規則
 1. 四色水平泳道：第三方、部門、資訊系統、產出資料與文件。
 2. 藍區資料資產：`NNN_名稱(D)(P)`；(D)=電子檔；(P)=紙本；可同時 (D)(P)。
-3. 箭頭標註：
-   - `A:方式(保護)` — 傳輸方式。保護僅 (X)/(權限)/(專人) 等。
-   - `C:編號(型態)` — 此邊承載的檔案。
-4. **重要**：方括號 `[...]` 若緊接在 A: 標註旁（如 `A:Email(X)[社交工程]`），`[社交工程]` 是情境備註，**不是**傳輸方式，不要放進 actions。
-5. `A:上傳` 與 `A:下載` 通常是**相反方向**的兩條邊，且常搭配不同 C: 檔案。
-6. 節點名稱旁的 `[角色/子系統]` 放入 note。
-   - 若圖上備註在名稱正下方，note_style=`newline`
-   - 若緊接名稱後方，note_style=`inline`
-7. 頁首擷取：編號、[控制者]作業名、部門、日期、版次。
+3. 箭頭標註（同一箭頭上可能有多段文字）：
+   - `A:方式(保護)[,方式(保護)...]` — **逗號分隔的每個方式都是獨立傳輸動作**，全部放入 actions。
+   - `C:編號[,編號...](型態)` — 此邊承載的檔案；多個編號各自一筆 carries。
+4. 方括號 `[...]` 若緊接在 A: 旁（如 `A:Email(X)[社交工程]`），是情境備註，**不是**傳輸方式。
+5. **方向性（極重要）**：
+   - 單箭頭：from→to 依箭頭方向。
+   - 雙箭頭／雙向線：`bidirectional=true`，同一組 A:/C: 兩個方向都要展開。
+   - `A:登打` 與 `A:列印` 出現在「部門↔系統」之間時，通常是**相反方向**：
+     - 登打：部門/人員 → 系統（電子 D）
+     - 列印：系統 → 部門/人員（紙本 P）
+     → 請拆成**兩條** unidirectional edges，不要塞在同一條同向邊。
+   - `A:上傳` 與 `A:下載` 同理，通常相反方向，拆成兩條邊。
+6. 節點 `[角色/子系統]` 放入 note；正下方用 note_style=`newline`，緊接名稱用 `inline`。
+7. **Sharepoint** 若標在資安室旁，節點名稱請用 `資安室sharepoint`（不要只寫 Sharepoint）。
+8. 頁首：編號、[控制者]作業名、部門、日期、版次。
 
-## 輸出（只輸出 JSON，勿包 markdown）
+## 輸出前自檢（必須全部通過）
+- [ ] 圖上每個單位／系統框都在 nodes（含「各單位」）
+- [ ] 每條可見箭頭都有 edge（含雙向）
+- [ ] A: 逗號分隔的每個方式都在 actions（親送、Line、Fax、Email 等不可合併漏掉）
+- [ ] C: 每個編號都在 carries
+- [ ] 登打/列印、上傳/下載已依方向拆邊
+
+## 範例 A：資安演練作業（簡圖）
 {
   "metadata": {
     "process_id": "1-1-1",
@@ -45,4 +58,51 @@
   ]
 }
 
-上面是「資安演練作業」正確範例。請對**目前上傳的圖**依同樣規則輸出；method 保留圖上用字；assets.name 不含編號與 (D)(P)。
+## 範例 B：支單作業（方向拆分 + 雙向多通道）
+重點：
+- `A:登打(權限),列印(權限)` + `C:007(D)(P)` → 拆成 資安→ERP 登打(D) 與 ERP→資安 列印(P)
+- 資安↔各單位 雙向箭頭上 `A:親送(專人),Line(X),Fax(X),Email(X)` + `C:007(D)(P)` → **一條 bidirectional edge**，actions 含四種方式（展開時每個方向×每種方式×對應型態）
+- 會計↔財務 雙向親送 會承載 006 與 007 紙本
+
+{
+  "metadata": {
+    "process_id": "1-1-8",
+    "process_name": "支單作業",
+    "department": "管理本部-資安暨個資管理室",
+    "controller_or_processor": "控制者",
+    "bif_version": "1.2",
+    "inventory_date": "2025/08/29",
+    "inventory_version": "V1.2",
+    "company": "雄獅旅行社股份有限公司"
+  },
+  "nodes": [
+    {"id": "sec", "name": "資安暨個資管理室", "lane": "department", "note": null, "note_style": "none"},
+    {"id": "erp", "name": "ERP系統", "lane": "system", "note": "支出作業，fnot", "note_style": "inline"},
+    {"id": "sp", "name": "資安室sharepoint", "lane": "system", "note": null, "note_style": "none"},
+    {"id": "fin", "name": "財務管理部", "lane": "department", "note": null, "note_style": "none"},
+    {"id": "acct", "name": "會計部", "lane": "department", "note": null, "note_style": "none"},
+    {"id": "admin", "name": "行政總務部", "lane": "department", "note": null, "note_style": "none"},
+    {"id": "units", "name": "各單位", "lane": "third_party", "note": null, "note_style": "none"}
+  ],
+  "assets": [
+    {"code": "006", "name": "票券(機票/火車/高鐵票)", "media": ["P"]},
+    {"code": "007", "name": "支單", "media": ["D", "P"]},
+    {"code": "022", "name": "計程車乘車券", "media": ["P"]}
+  ],
+  "edges": [
+    {"from": "sec", "to": "erp", "bidirectional": false, "actions": [{"method": "登打", "protection": "權限"}], "carries": [{"code": "007", "media": ["D"]}]},
+    {"from": "erp", "to": "sec", "bidirectional": false, "actions": [{"method": "列印", "protection": "權限"}], "carries": [{"code": "007", "media": ["P"]}]},
+    {"from": "sec", "to": "sp", "bidirectional": false, "actions": [{"method": "上傳", "protection": "權限"}], "carries": [{"code": "007", "media": ["D"]}]},
+    {"from": "sec", "to": "acct", "bidirectional": false, "actions": [{"method": "親送", "protection": "專人"}], "carries": [{"code": "006", "media": ["P"]}, {"code": "007", "media": ["P"]}]},
+    {"from": "acct", "to": "fin", "bidirectional": true, "actions": [{"method": "親送", "protection": "專人"}], "carries": [{"code": "006", "media": ["P"]}, {"code": "007", "media": ["P"]}]},
+    {"from": "sec", "to": "units", "bidirectional": true, "actions": [{"method": "親送", "protection": "專人"}, {"method": "Line", "protection": "X"}, {"method": "Fax", "protection": "X"}, {"method": "Email", "protection": "X"}], "carries": [{"code": "007", "media": ["D", "P"]}]},
+    {"from": "sec", "to": "admin", "bidirectional": false, "actions": [{"method": "親送", "protection": "專人"}], "carries": [{"code": "022", "media": ["P"]}]}
+  ]
+}
+
+## 額外硬性規則（支單／多通道常見）
+- 若看到完整字串 `A:親送(專人),Line(X),Fax(X),Email(X)`，actions **必須**含親送、Line、Fax、Email 四項，不可省略後三者。
+- 該標註若連到「第三方」泳道且對方沒有寫框名，對方節點名稱用 **各單位**，且通常 `bidirectional=true`，`C:007(D)(P)`。
+- 使用者可能另附局部放大圖；局部圖上的 A:/C: 與全圖衝突時以「兩者並集、不漏標註」為準。
+
+請對**目前上傳的圖**依同樣規則輸出完整 JSON（勿包 markdown）。method 保留圖上用字；assets.name 不含編號與 (D)(P)。

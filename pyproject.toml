@@ -30,7 +30,7 @@ flowpii = "flowpii.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-flowpii = ["prompts/*.txt"]
+flowpii = ["prompts/*.txt", "prompts/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
