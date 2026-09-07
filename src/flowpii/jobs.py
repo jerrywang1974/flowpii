@@ -55,6 +55,11 @@ class JobRecord:
 
 
 def new_job(filename: str | None) -> JobRecord:
+    """Create an isolated job directory + access token.
+
+    Sequential uploads (same user, file A then file B) each call this once;
+    jobs never share directories or tokens, so B cannot overwrite A's artifacts.
+    """
     job_id = uuid.uuid4().hex[:12]
     job = JobRecord(job_id=job_id, filename=filename, status="queued")
     job.dir.mkdir(parents=True, exist_ok=True)

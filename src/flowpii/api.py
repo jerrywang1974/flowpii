@@ -158,7 +158,13 @@ async def api_recognize(
     file: UploadFile = File(...),
     use_fixture: str | None = None,
 ):
-    """Accept upload, return job_id immediately, run recognition in background."""
+    """Accept upload, return job_id immediately, run recognition in background.
+
+    同一瀏覽器連續上傳第二個檔案時：
+    - 每次呼叫都會 ``new_job()``，產生全新 job_id / 目錄 / access_token
+    - 不會覆寫或取消上一個 job（上一個仍可憑舊 token 查詢／下載）
+    - 前端必須停止舊輪詢並綁定新 token，否則會顯示錯檔結果
+    """
     suffix = Path(file.filename or "upload.bin").suffix.lower()
     if suffix not in {".pdf", ".png", ".jpg", ".jpeg"}:
         raise HTTPException(400, detail="僅支援 PDF / JPG / PNG")
