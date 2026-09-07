@@ -178,10 +178,33 @@
 
   function invalidateDownload() {
     state.downloadUrl = null;
-    const a = $("btnDownload");
-    a.href = "#";
-    a.classList.add("pointer-events-none", "opacity-40");
+    const btn = $("btnDownload");
+    btn.disabled = true;
     $("successMsg").classList.add("hidden");
+  }
+
+  async function downloadExcelBlob(url) {
+    setStatus(t("downloading"));
+    const res = await fetch(url);
+    if (!res.ok) {
+      let detail = `download failed (HTTP ${res.status})`;
+      try {
+        const j = await res.json();
+        if (j.detail) detail = j.detail;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = "個人資料盤點清冊.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
   }
 
   function enableActions(on) {
@@ -306,29 +329,43 @@
 
   async function confirmExport() {
     if (!state.jobId || !state.accessToken) return;
-    setStatus("…");
-    const res = await fetch(`/api/jobs/${state.jobId}/confirm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        rows: state.rows,
-        graph: state.graph,
-        access_token: state.accessToken,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus(data.detail || "confirm failed", true);
-      return;
+    const btn = $("btnConfirm");
+    btn.disabled = true;
+    $("t-confirmExport").textContent = t("exporting");
+    setStatus(t("exporting"));
+    try {
+      const res = await fetch(`/api/jobs/${state.jobId}/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rows: state.rows,
+          graph: state.graph,
+          access_token: state.accessToken,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(
+          typeof data.detail === "string" ? data.detail : "confirm failed",
+          true
+        );
+        return;
+      }
+      state.downloadUrl = data.download_url;
+      $("btnDownload").disabled = false;
+      const msg = $("successMsg");
+      msg.textContent = t("success");
+      msg.classList.remove("hidden");
+      setStatus(`${data.row_count} rows · ${t("downloading")}`);
+      // Auto-download via blob (avoids same-tab navigation hang)
+      await downloadExcelBlob(data.download_url);
+      setStatus(`${data.row_count} rows · ${t("downloadReady")}`);
+    } catch (err) {
+      setStatus(String(err.message || err), true);
+    } finally {
+      $("t-confirmExport").textContent = t("confirmExport");
+      btn.disabled = false;
     }
-    state.downloadUrl = data.download_url;
-    const a = $("btnDownload");
-    a.href = data.download_url;
-    a.classList.remove("pointer-events-none", "opacity-40");
-    const msg = $("successMsg");
-    msg.textContent = t("success");
-    msg.classList.remove("hidden");
-    setStatus(`${data.row_count} rows confirmed`);
   }
 
   // events
@@ -373,6 +410,18 @@
     renderRows();
   });
   $("btnConfirm").addEventListener("click", confirmExport);
+  $("btnDownload").addEventListener("click", async () => {
+    if (!state.downloadUrl) {
+      setStatus(t("needConfirm"), true);
+      return;
+    }
+    try {
+      await downloadExcelBlob(state.downloadUrl);
+      setStatus(t("downloadReady"));
+    } catch (err) {
+      setStatus(String(err.message || err), true);
+    }
+  });
 
   loadI18n(state.lang).then(() => renderMeta(null));
 })();

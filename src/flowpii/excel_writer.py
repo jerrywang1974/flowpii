@@ -7,12 +7,11 @@ from openpyxl import load_workbook
 
 from .models import BifGraph, InventoryRow, Metadata
 
-# Default template: Korea demo has reference sheets + validations
-DEFAULT_TEMPLATE = (
-    Path(__file__).resolve().parents[2]
-    / "output"
-    / "個人資料盤點清冊 韓國DEMO.xlsx"
-)
+# Lean template (headers + reference sheets + validations; no sample data rows)
+_ROOT = Path(__file__).resolve().parents[2]
+_LEAN = _ROOT / "templates" / "inventory_template.xlsx"
+_FALLBACK = _ROOT / "output" / "個人資料盤點清冊 韓國DEMO.xlsx"
+DEFAULT_TEMPLATE = _LEAN if _LEAN.exists() else _FALLBACK
 
 COL = {
     "A": 1,
@@ -44,9 +43,8 @@ def clear_data_rows(ws, start_row: int = 5) -> None:
     max_row = ws.max_row or start_row
     if max_row < start_row:
         return
-    for r in range(start_row, max_row + 1):
-        for c in range(1, (ws.max_column or 43) + 1):
-            ws.cell(r, c).value = None
+    # Bulk delete is much faster than clearing cell-by-cell on large templates
+    ws.delete_rows(start_row, max_row - start_row + 1)
 
 
 def write_inventory_excel(
