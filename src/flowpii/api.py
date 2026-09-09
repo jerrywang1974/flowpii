@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .excel_writer import write_inventory_excel
 from .images import load_pages_as_png_bytes, save_preview_png
@@ -24,7 +26,7 @@ from .jobs import (
     require_job,
     save_job,
 )
-from .models import BifGraph, InventoryRow
+from .models import BifGraph, InventoryRow, Metadata
 from .recognize import recognize_from_fixture, recognize_images
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +55,7 @@ class RowEdit(BaseModel):
     process_id: str = Field(alias="A")
     process_name: str = Field(alias="B")
     file_name: str = Field(alias="G")
-    file_type: str = Field(alias="H")
+    file_type: Literal["1. 紙本", "2. 電子檔"] = Field(alias="H")
     source: str = Field(alias="AF")
     target: str = Field(alias="AG")
     transfer_method: str = Field(alias="AH")
@@ -71,7 +73,29 @@ def _token_from(
     access_token: str | None = None,
     x_flowpii_token: str | None = None,
 ) -> str | None:
-    return access_token or x_flowpii_token
+    token = access_token or x_flowpii_token
+    if token is not None:
+        token = token.strip() or None
+    return token
+
+
+def _resolve_fixture(use_fixture: str) -> Path:
+    """Allow only a basename under tests/fixtures; block path traversal."""
+    allow = os.getenv("FLOWPII_ALLOW_FIXTURES", "1").strip().lower()
+    if allow not in {"1", "true", "yes", "on"}:
+        raise HTTPException(403, detail="fixture 模式未啟用（FLOWPII_ALLOW_FIXTURES）")
+
+    fixtures_dir = (ROOT / "tests" / "fixtures").resolve()
+    raw = (use_fixture or "").replace("\\", "/").strip()
+    if not raw or "/" in raw or raw in {".", ".."} or Path(raw).is_absolute():
+        raise HTTPException(400, detail="無效的 fixture 名稱")
+    name = Path(raw).name
+    if name != raw:
+        raise HTTPException(400, detail="無效的 fixture 名稱")
+    path = (fixtures_dir / name).resolve()
+    if path.parent != fixtures_dir or not path.is_file():
+        raise HTTPException(400, detail="fixture 不存在")
+    return path
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -101,7 +125,7 @@ def health():
 def _run_recognize_sync(
     job_id: str,
     raw_path: Path,
-    use_fixture: str | None,
+    fixture_path: Path | None,
 ) -> None:
     job = load_job(job_id)
     if not job:
@@ -119,12 +143,8 @@ def _run_recognize_sync(
     try:
         job_dir = UPLOAD_DIR / job_id
         pdf_for_units = raw_path if raw_path.suffix.lower() == ".pdf" else None
-        if use_fixture:
-            fixture = ROOT / "tests" / "fixtures" / use_fixture
-            if not fixture.exists():
-                raise FileNotFoundError(f"fixture 不存在: {use_fixture}")
-            # Pass uploaded PDF so unlabeled 各單位 detection can run even with fixtures
-            result = recognize_from_fixture(fixture, pdf_path=pdf_for_units)
+        if fixture_path is not None:
+            result = recognize_from_fixture(fixture_path, pdf_path=pdf_for_units)
             preview = None
             try:
                 pages = load_pages_as_png_bytes(raw_path, dpi=120)
@@ -171,6 +191,8 @@ async def api_recognize(
     if suffix not in {".pdf", ".png", ".jpg", ".jpeg"}:
         raise HTTPException(400, detail="僅支援 PDF / JPG / PNG")
 
+    fixture_path = _resolve_fixture(use_fixture) if use_fixture else None
+
     job = new_job(file.filename)
     raw_path = job.dir / f"input{suffix}"
     content = await file.read()
@@ -182,7 +204,7 @@ async def api_recognize(
         _run_recognize_sync,
         job.job_id,
         raw_path,
-        use_fixture,
+        fixture_path,
     )
 
     return {
@@ -203,6 +225,7 @@ def job_status(
 ):
     token = _token_from(access_token, x_flowpii_token)
     job = require_job(job_id, token)
+    # Do not embed access_token in URLs; client already holds it from upload response.
     payload: dict = {
         "job_id": job.job_id,
         "filename": job.filename,
@@ -210,11 +233,7 @@ def job_status(
         "warnings": job.warnings,
         "error": job.error,
         "confirmed": job.confirmed,
-        "preview_url": (
-            f"/api/jobs/{job.job_id}/preview?access_token={job.access_token}"
-            if job.preview
-            else None
-        ),
+        "preview_url": (f"/api/jobs/{job.job_id}/preview" if job.preview else None),
     }
     if job.status == "done" or job.status == "confirmed":
         payload.update(
@@ -225,9 +244,7 @@ def job_status(
             }
         )
     if job.status == "confirmed" and job.excel:
-        payload["download_url"] = (
-            f"/api/jobs/{job.job_id}/download?access_token={job.access_token}"
-        )
+        payload["download_url"] = f"/api/jobs/{job.job_id}/download"
     return payload
 
 
@@ -249,23 +266,25 @@ def job_confirm(job_id: str, body: ConfirmRequest):
     if job.status not in {"done", "confirmed"}:
         raise HTTPException(400, detail=f"工作尚未完成辨識（status={job.status}）")
 
-    rows = [
-        InventoryRow(
-            process_id=r.process_id,
-            process_name=r.process_name,
-            file_name=r.file_name,
-            file_type=r.file_type,  # type: ignore[arg-type]
-            source=r.source,
-            target=r.target,
-            transfer_method=r.transfer_method,
-        )
-        for r in body.rows
-    ]
-    graph = BifGraph.model_validate(body.graph) if body.graph else None
-    out_path = OUT_DIR / f"{job_id}_inventory.xlsx"
-    from .models import Metadata
+    try:
+        rows = [
+            InventoryRow(
+                process_id=r.process_id,
+                process_name=r.process_name,
+                file_name=r.file_name,
+                file_type=r.file_type,
+                source=r.source,
+                target=r.target,
+                transfer_method=r.transfer_method,
+            )
+            for r in body.rows
+        ]
+        graph = BifGraph.model_validate(body.graph) if body.graph else None
+        meta = graph.metadata if graph else Metadata.model_validate(job.metadata or {})
+    except ValidationError as exc:
+        raise HTTPException(422, detail=exc.errors()) from exc
 
-    meta = graph.metadata if graph else Metadata.model_validate(job.metadata or {})
+    out_path = OUT_DIR / f"{job_id}_inventory.xlsx"
     write_inventory_excel(rows, out_path, graph=graph, metadata=meta)
     job.confirmed = True
     job.status = "confirmed"
@@ -276,7 +295,7 @@ def job_confirm(job_id: str, body: ConfirmRequest):
     save_job(job)
     return {
         "ok": True,
-        "download_url": f"/api/jobs/{job_id}/download?access_token={job.access_token}",
+        "download_url": f"/api/jobs/{job_id}/download",
         "row_count": len(rows),
     }
 

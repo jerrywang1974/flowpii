@@ -91,12 +91,17 @@ def load_job(job_id: str) -> JobRecord | None:
 
 
 def require_job(job_id: str, access_token: str | None = None) -> JobRecord:
+    """Load job and require a non-empty matching access_token (constant-time compare)."""
+    import hmac
+
     from fastapi import HTTPException
 
     job = load_job(job_id)
     if not job:
         raise HTTPException(404, detail="找不到工作")
-    if access_token is not None and access_token != job.access_token:
+    if not access_token:
+        raise HTTPException(403, detail="缺少 access_token")
+    if not hmac.compare_digest(access_token, job.access_token):
         raise HTTPException(403, detail="無權存取此工作（access_token 不符）")
     return job
 

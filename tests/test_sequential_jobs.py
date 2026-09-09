@@ -122,7 +122,10 @@ def test_confirm_first_job_after_second_started(client: TestClient):
         },
     )
     assert r.status_code == 200, r.text
-    dl = client.get(r.json()["download_url"])
+    dl = client.get(
+        r.json()["download_url"],
+        params={"access_token": a["access_token"]},
+    )
     assert dl.status_code == 200
     assert dl.content[:2] == b"PK"
 
