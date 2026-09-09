@@ -62,9 +62,10 @@ pytest -q
 |---|---|
 | 工作隔離 | 每次上傳產生獨立 `job_id` 與 `uploads/{job_id}/` 目錄 |
 | 非同步辨識 | 上傳後立即回傳，背景執行 AI；前端輪詢狀態 |
-| 存取權杖 | `access_token` 僅回傳給上傳者；確認／下載需帶此 token |
+| 存取權杖 | `access_token` 僅回傳給上傳者；查詢／預覽／確認／下載皆需帶此 token（不可省略） |
 | 併發上限 | 預設同時最多 2 件 AI 辨識（`FLOWPII_MAX_CONCURRENT`） |
 | 落盤 | `job.json` 持久化，重啟後仍可查詢未完成工作 |
+| Fixture | 僅允許 `tests/fixtures/` 下的檔名；可用 `FLOWPII_ALLOW_FIXTURES=0` 關閉 |
 
 **尚未包含**：登入帳號、跨多台機器的共用佇列（Redis／Celery）、企業 SSO。若要正式對外開放，建議再加帳密或 SSO。
 

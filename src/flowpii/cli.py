@@ -33,7 +33,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "recognize":
         if args.fixture:
-            result = recognize_from_fixture(args.fixture)
+            # Pass input PDF when available so unlabeled「各單位」detection can run
+            pdf_path = args.input if args.input.suffix.lower() == ".pdf" else None
+            result = recognize_from_fixture(args.fixture, pdf_path=pdf_path)
         else:
             result = recognize_file(args.input, dpi=args.dpi)
         write_inventory_excel(

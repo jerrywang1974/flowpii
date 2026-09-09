@@ -91,10 +91,11 @@
       ["Date", meta.inventory_date],
     ];
     box.innerHTML = items
-      .map(
-        ([k, v]) =>
-          `<div class="flex justify-between gap-3"><dt class="text-slate-400">${k}</dt><dd class="font-medium text-right">${v || "—"}</dd></div>`
-      )
+      .map(([k, v]) => {
+        const label = escapeHtml(k);
+        const value = escapeHtml(v == null || v === "" ? "—" : String(v));
+        return `<div class="flex justify-between gap-3"><dt class="text-slate-400">${label}</dt><dd class="font-medium text-right">${value}</dd></div>`;
+      })
       .join("");
   }
 
@@ -260,8 +261,15 @@
     renderWarnings(data.warnings || []);
     renderRows();
     enableActions(true);
-    if (data.preview_url) {
-      $("previewImg").src = data.preview_url + "&t=" + Date.now();
+    if (data.preview_url && state.accessToken) {
+      const sep = data.preview_url.includes("?") ? "&" : "?";
+      $("previewImg").src =
+        data.preview_url +
+        sep +
+        "access_token=" +
+        encodeURIComponent(state.accessToken) +
+        "&t=" +
+        Date.now();
       $("previewImg").classList.remove("hidden");
       $("previewEmpty").classList.add("hidden");
     }
@@ -398,13 +406,18 @@
         );
         return;
       }
-      state.downloadUrl = data.download_url;
+      const dl =
+        data.download_url +
+        (data.download_url.includes("?") ? "&" : "?") +
+        "access_token=" +
+        encodeURIComponent(state.accessToken);
+      state.downloadUrl = dl;
       $("btnDownload").disabled = false;
       const msg = $("successMsg");
       msg.textContent = t("success");
       msg.classList.remove("hidden");
       setStatus(`${data.row_count} rows · ${t("downloading")}`);
-      await downloadExcelBlob(data.download_url);
+      await downloadExcelBlob(dl);
       setStatus(`${data.row_count} rows · ${t("downloadReady")}`);
     } catch (err) {
       setStatus(String(err.message || err), true);
