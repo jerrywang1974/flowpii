@@ -34,7 +34,7 @@ class JobRecord:
     status: str = "queued"  # queued | running | done | error | confirmed
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
-    preview: str | None = None
+    preview: str | None = None  # first-page preview path (compat)
     excel: str | None = None
     error: str | None = None
     warnings: list[str] = field(default_factory=list)
@@ -44,6 +44,11 @@ class JobRecord:
     confirmed: bool = False
     # opaque token required for confirm/download (returned only to uploader)
     access_token: str = field(default_factory=lambda: uuid.uuid4().hex)
+    page_total: int = 0
+    pages_done: int = 0
+    page_index: int = 0  # 1-based current page being processed
+    # map "1" -> absolute path of preview_p1.png
+    page_previews: dict[str, str] = field(default_factory=dict)
 
     @property
     def dir(self) -> Path:
@@ -80,12 +85,15 @@ def save_job(job: JobRecord) -> None:
 
 
 def load_job(job_id: str) -> JobRecord | None:
+    from dataclasses import fields
+
     path = UPLOAD_DIR / job_id / "job.json"
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return JobRecord(**data)
+        allowed = {f.name for f in fields(JobRecord)}
+        return JobRecord(**{k: v for k, v in data.items() if k in allowed})
     except Exception:  # noqa: BLE001
         return None
 

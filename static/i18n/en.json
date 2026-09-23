@@ -2,12 +2,13 @@
   "appTitle": "FlowPII Inventory",
   "appSubtitle": "BIF / DFD diagram → ISO 27701 PII inventory Excel",
   "upload": "Upload BIF diagram",
-  "uploadHint": "PDF, JPG, PNG. Review rows before export.",
+  "uploadHint": "PDF, JPG, PNG (multi-page PDFs are recognized page by page then merged). Review before export.",
   "dropHere": "Drop a file here, or click to browse",
   "recognize": "Recognize",
-  "recognizing": "Recognizing (complex diagrams may take a few minutes)…",
-  "recognizingHint": "Complex BIF charts (e.g. Korea) may take 2–5 minutes.",
+  "recognizing": "Recognizing (multi-page runs page by page)…",
+  "recognizingHint": "Multi-page BIF charts may take longer.",
   "preview": "Diagram preview",
+  "filterPage": "Current page only",
   "rows": "Transfer rows (editable)",
   "addRow": "Add row",
   "delete": "Delete",
@@ -17,6 +18,7 @@
   "download": "Download inventory",
   "downloadReady": "Excel ready — click to download again",
   "needConfirm": "Confirm review before download",
+  "colPage": "Page",
   "colA": "Process ID",
   "colB": "Process name",
   "colG": "File name",
@@ -32,5 +34,5 @@
   "fixtureDemo": "Offline: DEMO fixture",
   "success": "Confirmed — Excel ready",
   "empty": "No data yet. Upload a diagram first.",
-  "footer": "Auto-filled: ID / process / file / media / From / To / method. Complete remaining legal fields in Excel."
+  "footer": "Auto-filled: ID / process / file / media / From / To / method. Multi-page results merge into one sheet."
 }

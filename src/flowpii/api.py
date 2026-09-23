@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from .excel_writer import write_inventory_excel
-from .images import load_pages_as_png_bytes, save_preview_png
+from .images import load_pages, save_preview_png
 from .jobs import (
     MAX_CONCURRENT_RECOGNIZE,
     OUT_DIR,
@@ -27,7 +27,7 @@ from .jobs import (
     save_job,
 )
 from .models import BifGraph, InventoryRow, Metadata
-from .recognize import recognize_from_fixture, recognize_images
+from .recognize import recognize_from_fixture, recognize_images, recognize_multipage
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_DIR = ROOT / "static"
@@ -39,7 +39,7 @@ _executor = ThreadPoolExecutor(
     thread_name_prefix="flowpii-recognize",
 )
 
-app = FastAPI(title="FlowPII", version="0.2.0")
+app = FastAPI(title="FlowPII", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,6 +59,7 @@ class RowEdit(BaseModel):
     source: str = Field(alias="AF")
     target: str = Field(alias="AG")
     transfer_method: str = Field(alias="AH")
+    source_page: int | None = Field(default=None, alias="page")
 
     model_config = {"populate_by_name": True}
 
@@ -110,7 +111,7 @@ def index() -> HTMLResponse:
 def health():
     return {
         "ok": True,
-        "version": "0.2.0",
+        "version": "0.3.0",
         "max_concurrent_recognize": MAX_CONCURRENT_RECOGNIZE,
         "multi_user": {
             "job_isolation": True,
@@ -143,22 +144,64 @@ def _run_recognize_sync(
     try:
         job_dir = UPLOAD_DIR / job_id
         pdf_for_units = raw_path if raw_path.suffix.lower() == ".pdf" else None
+        loaded = load_pages(raw_path, dpi=160 if fixture_path else 180)
+        page_previews: dict[str, str] = {}
+        for i, png in enumerate(loaded.pages):
+            p = save_preview_png(png, job_dir / f"preview_p{i + 1}.png")
+            page_previews[str(i + 1)] = str(p)
+        first_preview = page_previews.get("1")
+        job.page_total = len(loaded.pages)
+        job.pages_done = 0
+        job.page_index = 0
+        job.page_previews = page_previews
+        job.preview = first_preview
+        job.warnings = list(loaded.warnings)
+        save_job(job)
+
         if fixture_path is not None:
             result = recognize_from_fixture(fixture_path, pdf_path=pdf_for_units)
-            preview = None
-            try:
-                pages = load_pages_as_png_bytes(raw_path, dpi=120)
-                preview = save_preview_png(pages[0], job_dir / "preview.png")
-            except Exception:  # noqa: BLE001
-                preview = None
-        else:
-            pages = load_pages_as_png_bytes(raw_path, dpi=180)
-            preview = save_preview_png(pages[0], job_dir / "preview.png")
-            result = recognize_images(pages, pdf_path=pdf_for_units)
+            # stamp all rows as page 1 for fixture mode unless multipage fixtures later
+            result.rows = [
+                r.model_copy(update={"source_page": r.source_page or 1})
+                for r in result.rows
+            ]
+            result.page_total = len(loaded.pages)
+            result.pages_done = len(loaded.pages)
+        elif len(loaded.pages) > 1:
 
+            def _progress(page_no, total, _page_result, _err):
+                j = load_job(job_id)
+                if not j:
+                    return
+                j.page_index = page_no
+                j.page_total = total
+                j.pages_done = page_no
+                save_job(j)
+
+            result = recognize_multipage(
+                loaded.pages,
+                pdf_path=pdf_for_units,
+                work_dir=job_dir,
+                on_page_done=_progress,
+            )
+        else:
+            result = recognize_images(
+                loaded.pages, pdf_path=pdf_for_units
+            )
+            result.rows = [
+                r.model_copy(update={"source_page": 1}) for r in result.rows
+            ]
+            result.page_total = 1
+            result.pages_done = 1
+
+        job = load_job(job_id) or job
         job.status = "done"
-        job.preview = str(preview) if preview else None
-        job.warnings = list(result.warnings)
+        job.preview = first_preview
+        job.page_previews = page_previews
+        job.page_total = result.page_total or len(loaded.pages)
+        job.pages_done = result.pages_done or len(loaded.pages)
+        job.page_index = job.pages_done
+        job.warnings = list(loaded.warnings) + list(result.warnings)
         job.metadata = result.graph.metadata.model_dump()
         job.graph = json.loads(result.graph.model_dump_json(by_alias=True))
         job.rows = [r.as_dict() for r in result.rows]
@@ -168,6 +211,7 @@ def _run_recognize_sync(
         msg = str(exc)
         if len(msg) > 500:
             msg = msg[:500] + "…"
+        job = load_job(job_id) or job
         job.status = "error"
         job.error = f"辨識失敗: {msg}"
         save_job(job)
@@ -233,8 +277,13 @@ def job_status(
         "warnings": job.warnings,
         "error": job.error,
         "confirmed": job.confirmed,
-        "preview_url": (f"/api/jobs/{job.job_id}/preview" if job.preview else None),
+        "page_total": job.page_total,
+        "pages_done": job.pages_done,
+        "page_index": job.page_index,
+        "preview_url": (f"/api/jobs/{job.job_id}/preview?page=1" if job.preview or job.page_previews else None),
     }
+    if job.status in {"running", "done", "confirmed"} and job.page_total:
+        payload["progress"] = f"{job.pages_done}/{job.page_total}"
     if job.status == "done" or job.status == "confirmed":
         payload.update(
             {
@@ -251,13 +300,19 @@ def job_status(
 @app.get("/api/jobs/{job_id}/preview")
 def job_preview(
     job_id: str,
+    page: int = 1,
     access_token: str | None = None,
     x_flowpii_token: str | None = Header(default=None, alias="X-FlowPII-Token"),
 ):
     job = require_job(job_id, _token_from(access_token, x_flowpii_token))
-    if not job.preview:
-        raise HTTPException(404, detail="找不到預覽圖")
-    return FileResponse(job.preview, media_type="image/png")
+    path = None
+    if job.page_previews:
+        path = job.page_previews.get(str(page))
+    if not path and page == 1:
+        path = job.preview
+    if not path or not Path(path).is_file():
+        raise HTTPException(404, detail=f"找不到第 {page} 頁預覽圖")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.post("/api/jobs/{job_id}/confirm")
@@ -276,6 +331,7 @@ def job_confirm(job_id: str, body: ConfirmRequest):
                 source=r.source,
                 target=r.target,
                 transfer_method=r.transfer_method,
+                source_page=r.source_page,
             )
             for r in body.rows
         ]

@@ -2,12 +2,13 @@
   "appTitle": "FlowPII 個資盤點",
   "appSubtitle": "BIF / DFD 圖 → ISO 27701 個人資料盤點清冊",
   "upload": "上傳 BIF 圖",
-  "uploadHint": "支援 PDF、JPG、PNG。辨識後請人工覆核再匯出。",
+  "uploadHint": "支援 PDF、JPG、PNG（多頁 PDF 會逐頁辨識後合併）。辨識後請人工覆核再匯出。",
   "dropHere": "拖放檔案至此，或點擊選擇",
   "recognize": "開始辨識",
-  "recognizing": "辨識中（複雜圖可能需數分鐘，請稍候）…",
-  "recognizingHint": "韓國等複雜 BIF 圖可能需要 2–5 分鐘。",
+  "recognizing": "辨識中（多頁會逐頁處理，請稍候）…",
+  "recognizingHint": "多頁 BIF 可能需要較長時間。",
   "preview": "原圖預覽",
+  "filterPage": "僅目前頁",
   "rows": "傳輸列（可編輯）",
   "addRow": "新增一列",
   "delete": "刪除",
@@ -17,6 +18,7 @@
   "download": "下載清冊",
   "downloadReady": "Excel 已就緒，可再次下載",
   "needConfirm": "請先確認覆核結果",
+  "colPage": "來源頁",
   "colA": "檔案編號",
   "colB": "作業流程",
   "colG": "檔案名稱",
@@ -32,5 +34,5 @@
   "fixtureDemo": "離線：DEMO fixture",
   "success": "已確認，可下載 Excel",
   "empty": "尚無資料，請先上傳圖檔",
-  "footer": "自動填入欄位：編號／流程／檔名／型態／From／To／傳輸方式。其餘法遵欄位請於 Excel 補齊。"
+  "footer": "自動填入欄位：編號／流程／檔名／型態／From／To／傳輸方式。多頁結果合併於同一表；其餘法遵欄位請於 Excel 補齊。"
 }
