@@ -151,9 +151,10 @@ class InventoryRow(BaseModel):
     source: str
     target: str
     transfer_method: str
+    source_page: int | None = None  # 1-based page for multipage UI (not an Excel column)
 
     def as_dict(self) -> dict[str, str]:
-        return {
+        out: dict[str, str] = {
             "A": self.process_id,
             "B": self.process_name,
             "G": self.file_name,
@@ -162,6 +163,9 @@ class InventoryRow(BaseModel):
             "AG": self.target,
             "AH": self.transfer_method,
         }
+        if self.source_page is not None:
+            out["page"] = str(self.source_page)
+        return out
 
 
 class RecognizeResult(BaseModel):
@@ -169,3 +173,5 @@ class RecognizeResult(BaseModel):
     rows: list[InventoryRow] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     confirmed: bool = False
+    page_total: int = 1
+    pages_done: int = 0

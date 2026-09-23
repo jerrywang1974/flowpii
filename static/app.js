@@ -20,6 +20,9 @@
     pollTimer: null,
     /** 遞增序號：每次 runRecognize 開始時 +1；過期 poll 不得套用結果 */
     recognizeGeneration: 0,
+    pageTotal: 1,
+    previewPage: 1,
+    filterPageOnly: false,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -49,6 +52,7 @@
       "t-empty": "empty",
       "t-warnings": "warnings",
       "t-preview": "preview",
+      "t-filterPage": "filterPage",
       "t-rows": "rows",
       "t-addRow": "addRow",
       "t-confirmExport": "confirmExport",
@@ -60,6 +64,7 @@
       const el = $(id);
       if (el) el.textContent = t(key);
     });
+    $("th-page").textContent = t("colPage");
     $("th-A").textContent = t("colA");
     $("th-B").textContent = t("colB");
     $("th-G").textContent = t("colG");
@@ -69,6 +74,7 @@
     $("th-AH").textContent = t("colAH");
     document.documentElement.lang = state.lang === "en" ? "en" : "zh-Hant";
     renderRows();
+    updatePageNav();
   }
 
   function setStatus(msg, isError = false) {
@@ -122,6 +128,7 @@
   function blankRow() {
     const meta = state.graph?.metadata || {};
     return {
+      page: String(state.previewPage || 1),
       A: meta.process_id || "",
       B: meta.process_name || "",
       G: "",
@@ -132,12 +139,65 @@
     };
   }
 
+  function updatePageNav() {
+    const nav = $("pageNav");
+    const total = state.pageTotal || 1;
+    if (total > 1) {
+      nav.classList.remove("hidden");
+      nav.classList.add("flex");
+    } else {
+      nav.classList.add("hidden");
+      nav.classList.remove("flex");
+    }
+    $("pageLabel").textContent = `${state.previewPage} / ${total}`;
+    $("btnPrevPage").disabled = state.previewPage <= 1;
+    $("btnNextPage").disabled = state.previewPage >= total;
+  }
+
+  function showPreviewPage(page) {
+    if (!state.jobId || !state.accessToken) return;
+    const total = state.pageTotal || 1;
+    state.previewPage = Math.min(Math.max(1, page), total);
+    updatePageNav();
+    const url =
+      `/api/jobs/${state.jobId}/preview?page=${state.previewPage}` +
+      `&access_token=${encodeURIComponent(state.accessToken)}&t=${Date.now()}`;
+    $("previewImg").src = url;
+    $("previewImg").classList.remove("hidden");
+    $("previewEmpty").classList.add("hidden");
+    if (state.filterPageOnly) renderRows();
+  }
+
   function renderRows() {
     const tbody = $("tbody");
     tbody.innerHTML = "";
     state.rows.forEach((row, idx) => {
+      if (
+        state.filterPageOnly &&
+        row.page &&
+        String(row.page) !== String(state.previewPage)
+      ) {
+        return;
+      }
       const tr = document.createElement("tr");
       tr.className = "align-top";
+      if (row.page && String(row.page) === String(state.previewPage)) {
+        tr.classList.add("bg-brand-50/40");
+      }
+      // page column
+      const tdPage = document.createElement("td");
+      tdPage.className = "px-1 py-1";
+      const pageInput = document.createElement("input");
+      pageInput.className =
+        "w-12 rounded border border-slate-200 px-1 py-1 text-xs";
+      pageInput.value = row.page || "";
+      pageInput.addEventListener("input", () => {
+        state.rows[idx].page = pageInput.value;
+        invalidateDownload();
+      });
+      tdPage.appendChild(pageInput);
+      tr.appendChild(tdPage);
+
       const fields = ["A", "B", "G", "H", "AF", "AG", "AH"];
       fields.forEach((f) => {
         const td = document.createElement("td");
@@ -205,9 +265,14 @@
     state.accessToken = null;
     state.graph = null;
     state.rows = [];
+    state.pageTotal = 1;
+    state.previewPage = 1;
+    state.filterPageOnly = false;
+    $("filterPageOnly").checked = false;
     renderRows();
     renderMeta(null);
     renderWarnings([]);
+    updatePageNav();
     $("previewImg").classList.add("hidden");
     $("previewImg").removeAttribute("src");
     $("previewEmpty").classList.remove("hidden");
@@ -257,22 +322,13 @@
 
     state.graph = data.graph;
     state.rows = data.rows || [];
+    state.pageTotal = data.page_total || 1;
+    state.previewPage = 1;
     renderMeta(data.metadata);
     renderWarnings(data.warnings || []);
     renderRows();
     enableActions(true);
-    if (data.preview_url && state.accessToken) {
-      const sep = data.preview_url.includes("?") ? "&" : "?";
-      $("previewImg").src =
-        data.preview_url +
-        sep +
-        "access_token=" +
-        encodeURIComponent(state.accessToken) +
-        "&t=" +
-        Date.now();
-      $("previewImg").classList.remove("hidden");
-      $("previewEmpty").classList.add("hidden");
-    }
+    showPreviewPage(1);
     setStatus(`${(data.rows || []).length} rows · job ${state.jobId}`);
   }
 
@@ -296,7 +352,20 @@
       return true;
     }
     if (data.status === "queued" || data.status === "running") {
-      setStatus(`${t("recognizing")} (${data.status}) · job ${expectedJobId}`);
+      const prog = data.progress || data.page_index
+        ? ` ${data.pages_done || data.page_index || 0}/${data.page_total || "?"}`
+        : "";
+      setStatus(
+        `${t("recognizing")} (${data.status}${prog}) · job ${expectedJobId}`
+      );
+      // show preview as pages become available
+      if (data.page_total) {
+        state.pageTotal = data.page_total;
+        updatePageNav();
+        if (data.pages_done >= 1) {
+          showPreviewPage(Math.min(data.pages_done, data.page_total));
+        }
+      }
       return false;
     }
     if (data.status === "error") {
@@ -469,6 +538,16 @@
   $("btnAdd").addEventListener("click", () => {
     state.rows.push(blankRow());
     invalidateDownload();
+    renderRows();
+  });
+  $("btnPrevPage").addEventListener("click", () =>
+    showPreviewPage(state.previewPage - 1)
+  );
+  $("btnNextPage").addEventListener("click", () =>
+    showPreviewPage(state.previewPage + 1)
+  );
+  $("filterPageOnly").addEventListener("change", (e) => {
+    state.filterPageOnly = !!e.target.checked;
     renderRows();
   });
   $("btnConfirm").addEventListener("click", confirmExport);
